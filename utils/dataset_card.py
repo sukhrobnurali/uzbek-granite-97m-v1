@@ -59,9 +59,9 @@ configs:
   - config_name: default
     data_files:
       - split: train
-        path: default/train-*
+        path: data/train-*
       - split: validation
-        path: default/validation-*
+        path: data/validation-*
   - config_name: wiki_retrieval_eval
     data_files:
       - split: test

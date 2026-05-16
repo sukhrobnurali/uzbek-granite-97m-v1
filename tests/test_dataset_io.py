@@ -6,8 +6,8 @@ from utils.dataset_io import (
     _split_wiki_filtered,
     filter_dataset,
     is_valid_uzbek_side,
+    load_flores_plus,
     passes_filters,
-    transform_flores,
     transform_opus100,
     transform_parallel_opus,
     transform_tatoeba,
@@ -29,23 +29,6 @@ def make_parallel_opus_fixture():
     return Dataset.from_dict({
         "english": ["Tashkent is the capital.", "Bukhara is a city."],
         "non_english": ["Toshkent — poytaxt.", "Buxoro — shahar."],
-    })
-
-
-def make_flores_fixture():
-    return Dataset.from_dict({
-        "id": [1, 2],
-        "URL": ["http://example.com/1", "http://example.com/2"],
-        "domain": ["wikinews", "wikibooks"],
-        "topic": ["politics", "history"],
-        "sentence_uzn_Latn": [
-            "Bugun Toshkentda yomgʻir yogʻdi.",
-            "Samarqand qadimiy shahar hisoblanadi.",
-        ],
-        "sentence_eng_Latn": [
-            "It rained in Tashkent today.",
-            "Samarkand is considered an ancient city.",
-        ],
     })
 
 
@@ -106,11 +89,34 @@ def test_parallel_opus_transform_returns_unified_schema():
     assert ds[0]["source"] == "parallel_opus"
 
 
-def test_flores_transform_returns_unified_schema():
-    ds = transform_flores(make_flores_fixture())
+def test_flores_plus_joins_languages_by_id(monkeypatch, tmp_path):
+    import utils.dataset_io as dio
+
+    uz_file = tmp_path / "uzn.jsonl"
+    en_file = tmp_path / "eng.jsonl"
+    uz_file.write_text(
+        '{"id": 1, "text": "Bugun Toshkentda yomgir."}\n'
+        '{"id": 2, "text": "Samarqand qadimiy."}\n'
+        '{"id": 3, "text": "Orphan uzbek row."}\n',
+        encoding="utf-8",
+    )
+    en_file.write_text(
+        '{"id": 1, "text": "It rained in Tashkent today."}\n'
+        '{"id": 2, "text": "Samarkand is ancient."}\n',
+        encoding="utf-8",
+    )
+
+    def fake_download(repo_id, filename, **kwargs):
+        return str(uz_file if "uzn" in filename else en_file)
+
+    monkeypatch.setattr(dio, "hf_hub_download", fake_download)
+
+    ds = load_flores_plus("dev", "flores_dev_latn")
     assert set(ds.column_names) == set(UNIFIED_COLS)
+    assert len(ds) == 2  # row 3 has no English pair, dropped
+    assert ds[0]["source"] == "flores_dev_latn"
     assert "Toshkentda" in ds[0]["anchor"]
-    assert ds[0]["source"] == "flores"
+    assert "Tashkent" in ds[0]["positive"]
 
 
 def test_wiki_transform_drops_bad_articles():

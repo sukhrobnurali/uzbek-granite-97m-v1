@@ -108,7 +108,7 @@ Every row has the same five columns:
 | OPUS-100 en-uz | `Helsinki-NLP/opus-100` | unknown (flagged below) | Parallel sentences (subset, after dedup) |
 | Parallel-sentences-OPUS | `sentence-transformers/parallel-sentences-opus-100` | unknown | Cleaner OPUS variant (preferred on dedup collisions) |
 | Uzbek Wikipedia | `yakhyo/uz-wiki` | MIT | Title-first-80-words pairs |
-| FLORES-200 dev | `Muennighoff/flores200` | CC-BY-SA-4.0 | Validation split only (uzn_Latn-eng_Latn + uzn_Cyrl-eng_Latn or transliterated) |
+| FLORES+ dev | `openlanguagedata/flores_plus` | CC-BY-SA-4.0 (gated) | Validation split only (uzn_Latn-eng_Latn; Cyrillic side transliterated) |
 
 ### Source distribution in `default/train`
 

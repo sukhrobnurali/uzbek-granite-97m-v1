@@ -1,11 +1,13 @@
 from __future__ import annotations
 
+import json
 import logging
 import random
 import re
 from typing import Any
 
 from datasets import Dataset, load_dataset
+from huggingface_hub import hf_hub_download
 
 from .translit import auto_detect_script, normalize_text
 
@@ -114,20 +116,34 @@ def transform_parallel_opus(ds: Dataset, source_tag: str = "parallel_opus") -> D
     return ds.map(_map, remove_columns=ds.column_names)
 
 
-def transform_flores(
-    ds: Dataset,
-    uz_field: str = "sentence_uzn_Latn",
-    en_field: str = "sentence_eng_Latn",
-    source_tag: str = "flores",
-) -> Dataset:
-    """FLORES-200 schema: {"id", "URL", "domain", "topic", "sentence_<lang>_<script>", ...}."""
+FLORES_PLUS_REPO = "openlanguagedata/flores_plus"
 
-    def _map(row: dict) -> dict:
-        uz = row.get(uz_field, "")
-        en = row.get(en_field, "")
-        return _make_row(uz, en, source_tag)
 
-    return ds.map(_map, remove_columns=ds.column_names)
+def _read_flores_jsonl(split: str, lang: str) -> dict[int, str]:
+    """Download one flores_plus per-language jsonl and return {id: text}."""
+    path = hf_hub_download(FLORES_PLUS_REPO, f"{split}/{lang}.jsonl", repo_type="dataset")
+    rows: dict[int, str] = {}
+    with open(path, encoding="utf-8") as f:
+        for line in f:
+            row = json.loads(line)
+            rows[row["id"]] = row["text"]
+    return rows
+
+
+def load_flores_plus(split: str, source_tag: str) -> Dataset:
+    """Load FLORES+ uzn_Latn / eng_Latn for one split, paired by row id.
+
+    Each language is a single jsonl file; pairs are constructed by joining on `id`.
+    flores_plus has no uzn_Cyrl variant, so build_validation falls back to translit.
+    """
+    uz_rows = _read_flores_jsonl(split, "uzn_Latn")
+    en_rows = _read_flores_jsonl(split, "eng_Latn")
+    paired = [
+        _make_row(uz_text, en_rows[rid], source_tag)
+        for rid, uz_text in uz_rows.items()
+        if rid in en_rows
+    ]
+    return Dataset.from_list(paired)
 
 
 def transform_wiki(
@@ -197,29 +213,20 @@ _LOADERS: dict[str, dict[str, Any]] = {
         "split": "train",
         "transform": transform_parallel_opus,
     },
+    # FLORES via openlanguagedata/flores_plus: per-language jsonl, joined by row id.
+    # flores_plus has no uzn_Cyrl, so the *_cyrl loaders return None and
+    # build_validation falls through to translit fallback (documented in card).
     "flores_dev_latn": {
-        "hf_id": "Muennighoff/flores200",
-        "config": "uzn_Latn-eng_Latn",
-        "split": "dev",
-        "transform": lambda ds: transform_flores(ds, "sentence_uzn_Latn", "sentence_eng_Latn", "flores_dev_latn"),
+        "custom_loader": lambda: load_flores_plus("dev", "flores_dev_latn"),
     },
     "flores_dev_cyrl": {
-        "hf_id": "Muennighoff/flores200",
-        "config": "uzn_Cyrl-eng_Latn",
-        "split": "dev",
-        "transform": lambda ds: transform_flores(ds, "sentence_uzn_Cyrl", "sentence_eng_Latn", "flores_dev_cyrl"),
+        "custom_loader": lambda: None,
     },
     "flores_devtest_latn": {
-        "hf_id": "Muennighoff/flores200",
-        "config": "uzn_Latn-eng_Latn",
-        "split": "devtest",
-        "transform": lambda ds: transform_flores(ds, "sentence_uzn_Latn", "sentence_eng_Latn", "flores_devtest_latn"),
+        "custom_loader": lambda: load_flores_plus("devtest", "flores_devtest_latn"),
     },
     "flores_devtest_cyrl": {
-        "hf_id": "Muennighoff/flores200",
-        "config": "uzn_Cyrl-eng_Latn",
-        "split": "devtest",
-        "transform": lambda ds: transform_flores(ds, "sentence_uzn_Cyrl", "sentence_eng_Latn", "flores_devtest_cyrl"),
+        "custom_loader": lambda: None,
     },
     "wiki": {
         "hf_id": "yakhyo/uz-wiki",
@@ -238,12 +245,27 @@ _LOADERS: dict[str, dict[str, Any]] = {
 
 def load_source(name: str, smoke: bool = False, max_rows: int | None = None) -> Dataset | None:
     """Load and transform a source by name. Returns None if the source is unavailable
-    (e.g. FLORES-200 uzn_Cyrl config missing), so callers can fall through to a
-    documented fallback path rather than crashing.
+    (e.g. flores_plus uzn_Cyrl absent), so callers can fall through to a documented
+    fallback path rather than crashing.
     """
     if name not in _LOADERS:
         raise KeyError(f"Unknown source: {name}. Known: {sorted(_LOADERS.keys())}")
     spec = _LOADERS[name]
+
+    if "custom_loader" in spec:
+        try:
+            ds = spec["custom_loader"]()
+        except Exception as exc:
+            log.warning("Could not load %s via custom_loader: %s", name, exc)
+            return None
+        if ds is None:
+            return None
+        if smoke:
+            ds = ds.select(range(min(50, len(ds))))
+        elif max_rows is not None:
+            ds = ds.select(range(min(max_rows, len(ds))))
+        return ds
+
     kwargs = {}
     if spec["config"] is not None:
         kwargs["name"] = spec["config"]

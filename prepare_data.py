@@ -20,12 +20,14 @@ CLI:
 from __future__ import annotations
 
 import argparse
+import random as _random
 from pathlib import Path
 
 from datasets import Dataset, concatenate_datasets
 
 from utils import dataset_io, dedup
 from utils.logging_setup import configure
+from utils.translit import to_cyrillic, to_latin
 
 log = configure()
 
@@ -35,6 +37,67 @@ log = configure()
 # explicitly via --sources tatoeba if a future parquet mirror appears.
 SOURCES_DEFAULT = ("parallel_opus", "opus100", "wiki")
 FORBIDDEN_SOURCES = ("flores_devtest_latn", "flores_devtest_cyrl")
+
+
+def augment_mixscript(
+    pool: Dataset,
+    target_ratio: float = 0.10,
+    seed: int = 42,
+    oversample_factor: float = 1.05,
+) -> Dataset:
+    """Generate mix-script training pairs by transliterating Uzbek anchors.
+
+    Samples eligible rows (anchor_lang in {uz_Latn, uz_Cyrl}) stratified by source,
+    transliterates the anchor to the opposite script, and emits
+    {anchor: original, positive: transliterated, source: "mixscript", ...}.
+
+    Target satisfies n_aug / (len(pool) + n_aug) ~= target_ratio.
+    """
+    eligible_indices = [
+        i for i, lang in enumerate(pool["anchor_lang"]) if lang in {"uz_Latn", "uz_Cyrl"}
+    ]
+    if not eligible_indices:
+        return Dataset.from_list([])
+
+    n_target = round(len(pool) * target_ratio / (1.0 - target_ratio))
+    n_to_sample = min(int(n_target * oversample_factor), len(eligible_indices))
+
+    rng = _random.Random(seed)
+    by_source: dict[str, list[int]] = {}
+    for idx in eligible_indices:
+        src = pool["source"][idx]
+        by_source.setdefault(src, []).append(idx)
+
+    sampled: list[int] = []
+    for _src, idxs in by_source.items():
+        per_source = round(n_to_sample * len(idxs) / len(eligible_indices))
+        per_source = min(per_source, len(idxs))
+        sampled.extend(rng.sample(idxs, per_source))
+    rng.shuffle(sampled)
+
+    rows: list[dict] = []
+    for idx in sampled:
+        anchor = pool["anchor"][idx]
+        anchor_lang = pool["anchor_lang"][idx]
+        if anchor_lang == "uz_Latn":
+            positive = to_cyrillic(anchor)
+            positive_lang = "uz_Cyrl"
+        else:
+            positive = to_latin(anchor)
+            positive_lang = "uz_Latn"
+        if not positive or positive == anchor:
+            continue
+        rows.append({
+            "anchor": anchor,
+            "positive": positive,
+            "source": "mixscript",
+            "anchor_lang": anchor_lang,
+            "positive_lang": positive_lang,
+        })
+        if len(rows) >= n_target:
+            break
+
+    return Dataset.from_list(rows)
 
 
 def build_pool(

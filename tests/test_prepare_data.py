@@ -78,3 +78,62 @@ def test_build_pool_skips_missing_source_but_continues(monkeypatch):
     monkeypatch.setattr(prepare_data.dataset_io, "load_source", fake_load_source)
     combined, _ = prepare_data.build_pool(sources=("opus100", "tatoeba"))
     assert set(combined["source"]) == {"opus100"}
+
+
+class TestMixscriptAug:
+    @staticmethod
+    def _pool(n: int, anchor_lang: str = "uz_Latn", source: str = "parallel_opus") -> Dataset:
+        return Dataset.from_list([
+            {
+                "anchor": f"Toshkent shahar markazi {i}",
+                "positive": f"Tashkent city center {i}",
+                "source": source,
+                "anchor_lang": anchor_lang,
+                "positive_lang": "en",
+            }
+            for i in range(n)
+        ])
+
+    def test_target_ratio_about_10pct(self):
+        pool = self._pool(100)
+        aug = prepare_data.augment_mixscript(pool, target_ratio=0.10, seed=42)
+        assert 9 <= len(aug) <= 13
+
+    def test_deterministic(self):
+        pool = self._pool(100)
+        aug1 = prepare_data.augment_mixscript(pool, target_ratio=0.10, seed=42)
+        aug2 = prepare_data.augment_mixscript(pool, target_ratio=0.10, seed=42)
+        assert list(aug1["anchor"]) == list(aug2["anchor"])
+        assert list(aug1["positive"]) == list(aug2["positive"])
+
+    def test_flips_script_and_tags_source(self):
+        pool = self._pool(100)
+        aug = prepare_data.augment_mixscript(pool, target_ratio=0.10, seed=42)
+        assert len(aug) > 0
+        for row in aug:
+            assert row["source"] == "mixscript"
+            assert row["anchor_lang"] != row["positive_lang"]
+            assert row["anchor_lang"] in {"uz_Latn", "uz_Cyrl"}
+            assert row["positive_lang"] in {"uz_Latn", "uz_Cyrl"}
+
+    def test_excludes_non_uzbek_anchors(self):
+        pool = self._pool(100, anchor_lang="en")
+        aug = prepare_data.augment_mixscript(pool, target_ratio=0.10, seed=42)
+        assert len(aug) == 0
+
+    def test_handles_cyrillic_anchors(self):
+        pool = Dataset.from_list([
+            {
+                "anchor": "Тошкент шаҳар",
+                "positive": "Tashkent city",
+                "source": "wiki",
+                "anchor_lang": "uz_Cyrl",
+                "positive_lang": "en",
+            }
+            for _ in range(100)
+        ])
+        aug = prepare_data.augment_mixscript(pool, target_ratio=0.10, seed=42)
+        assert len(aug) > 0
+        for row in aug:
+            assert row["anchor_lang"] == "uz_Cyrl"
+            assert row["positive_lang"] == "uz_Latn"

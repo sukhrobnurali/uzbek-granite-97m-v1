@@ -1,0 +1,35 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+.pytest_cache/
+.ruff_cache/
+
+# Virtual envs
+.venv/
+venv/
+env/
+
+# Editor / OS
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+
+# Project artifacts
+checkpoints/
+hf_cache/
+wandb/
+*.parquet
+!tests/fixtures/*.parquet
+
+# Eval outputs — keep the JSONs themselves, ignore stray binaries
+results/*.bin
+results/*.npy
+results/*.faiss
+
+# Secrets
+.env
+.env.local
+*.token

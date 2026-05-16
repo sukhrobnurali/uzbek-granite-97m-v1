@@ -1,0 +1,30 @@
+# Core training
+sentence-transformers>=5.3.0,<6.0.0
+transformers>=4.50.0,<5.0.0
+torch>=2.4.0,<3.0.0
+accelerate>=1.0.0,<2.0.0
+datasets>=3.0.0,<5.0.0
+huggingface_hub>=0.26.0,<2.0.0
+
+# Data prep
+pandas>=2.2.0
+pyarrow>=17.0.0
+datasketch>=1.6.0
+
+# Transliteration
+UzTransliterator==0.0.36
+
+# Eval
+scikit-learn>=1.5.0
+numpy>=1.26.0,<3.0.0
+
+# App / Space
+gradio>=5.0.0,<7.0.0
+faiss-cpu==1.8.0
+
+# Config / misc
+pydantic>=2.8.0
+pydantic-settings>=2.5.0
+PyYAML>=6.0
+tqdm>=4.66.0
+python-dotenv>=1.0.1

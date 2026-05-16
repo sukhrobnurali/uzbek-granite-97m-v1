@@ -1,0 +1,27 @@
+[project]
+name = "uzbek-embeddings"
+version = "0.1.0"
+description = "Uzbek sentence embedding model fine-tune — sukhrobnurali/uzbek-granite-97m-v1"
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "Apache-2.0" }
+authors = [{ name = "Sukhrob Nurali" }]
+
+[tool.ruff]
+line-length = 100
+target-version = "py310"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "B", "UP", "SIM", "RUF"]
+ignore = [
+    "E501",  # line too long (line-length handles this; some long URLs/strings allowed)
+    "B008",  # do not perform function calls in argument defaults — common in CLI/Pydantic
+]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/*" = ["B011"]  # assert False used intentionally in tests
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+python_files = "test_*.py"
+addopts = "-v --tb=short"

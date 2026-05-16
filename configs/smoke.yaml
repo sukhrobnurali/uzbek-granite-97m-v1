@@ -1,0 +1,17 @@
+base_model: ibm-granite/granite-embedding-97m-multilingual-r2
+dataset_id: sukhrobnurali/uzbek-embedding-pairs
+dataset_config: smoke_100
+target_repo: sukhrobnurali/uzbek-granite-97m-v1
+output_dir: checkpoints/smoke
+seed: 42
+max_seq_length: 256
+epochs: 1
+batch_size: 16
+learning_rate: 2.0e-5
+warmup_ratio: 0.1
+gradient_accumulation_steps: 1
+eval_steps: 50
+save_steps: 50
+save_total_limit: 1
+logging_steps: 10
+push: false

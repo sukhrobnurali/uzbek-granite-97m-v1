@@ -1,7 +1,10 @@
+from unittest.mock import MagicMock
+
 import pytest
 from datasets import Dataset
 
 import prepare_data
+from utils import hf_push
 
 
 def _fake_source(source_tag: str, n: int = 5) -> Dataset:
@@ -252,3 +255,117 @@ class TestSmoke100:
         )
         smoke = prepare_data.build_smoke_100(pool, seed=42)
         assert len(smoke) == 50
+
+
+class TestPushPreflight:
+    @staticmethod
+    def _tiny_dataset() -> Dataset:
+        return Dataset.from_list([
+            {"anchor": "a", "positive": "b", "source": "parallel_opus",
+             "anchor_lang": "uz_Latn", "positive_lang": "en"}
+        ])
+
+    @staticmethod
+    def _stats() -> dict:
+        return {
+            "repo_id": "user/test", "train_rows": 1, "validation_rows": 1,
+            "retrieval_rows": 1, "smoke_rows": 1,
+            "source_distribution": {"parallel_opus": 1},
+            "mixscript_ratio": 0.10, "validation_cyrl_source": "native",
+            "near_dedup_threshold": 0.9, "generation_date": "2026-05-17",
+        }
+
+    def test_aborts_on_no_response(self, monkeypatch):
+        ds = self._tiny_dataset()
+        fake_api = MagicMock()
+        fake_api.repo_exists.return_value = False
+        fake_api.whoami.return_value = {"name": "tester"}
+        perform = MagicMock()
+        monkeypatch.setenv("HF_TOKEN", "fake-token")
+        monkeypatch.setattr(hf_push, "HfApi", lambda: fake_api)
+        monkeypatch.setattr(hf_push, "_perform_pushes", perform)
+        monkeypatch.setattr("builtins.input", lambda _prompt: "no")
+
+        with pytest.raises(SystemExit):
+            hf_push.push_to_hf(
+                train=ds, validation=ds, retrieval=ds, smoke=ds,
+                repo_id="user/test", stats=self._stats(),
+                confirm=False, allow_overwrite=False,
+            )
+        perform.assert_not_called()
+        fake_api.create_repo.assert_called_once()
+
+    def test_aborts_on_existing_repo_without_overwrite(self, monkeypatch):
+        ds = self._tiny_dataset()
+        fake_api = MagicMock()
+        fake_api.repo_exists.return_value = True
+        perform = MagicMock()
+        monkeypatch.setenv("HF_TOKEN", "fake-token")
+        monkeypatch.setattr(hf_push, "HfApi", lambda: fake_api)
+        monkeypatch.setattr(hf_push, "_perform_pushes", perform)
+
+        with pytest.raises(SystemExit, match="exists"):
+            hf_push.push_to_hf(
+                train=ds, validation=ds, retrieval=ds, smoke=ds,
+                repo_id="user/test", stats=self._stats(),
+                confirm=True, allow_overwrite=False,
+            )
+        perform.assert_not_called()
+        fake_api.create_repo.assert_not_called()
+
+    def test_proceeds_with_confirm_flag(self, monkeypatch):
+        ds = self._tiny_dataset()
+        fake_api = MagicMock()
+        fake_api.repo_exists.return_value = False
+        fake_api.whoami.return_value = {"name": "tester"}
+        perform = MagicMock()
+        push_card = MagicMock()
+        monkeypatch.setenv("HF_TOKEN", "fake-token")
+        monkeypatch.setattr(hf_push, "HfApi", lambda: fake_api)
+        monkeypatch.setattr(hf_push, "_perform_pushes", perform)
+        monkeypatch.setattr(hf_push, "_push_card", push_card)
+
+        hf_push.push_to_hf(
+            train=ds, validation=ds, retrieval=ds, smoke=ds,
+            repo_id="user/test", stats=self._stats(),
+            confirm=True, allow_overwrite=False,
+        )
+        perform.assert_called_once()
+        push_card.assert_called_once()
+
+    def test_aborts_without_hf_token(self, monkeypatch):
+        ds = self._tiny_dataset()
+        monkeypatch.delenv("HF_TOKEN", raising=False)
+        with pytest.raises(SystemExit, match="HF_TOKEN"):
+            hf_push.push_to_hf(
+                train=ds, validation=ds, retrieval=ds, smoke=ds,
+                repo_id="user/test", stats=self._stats(),
+                confirm=True, allow_overwrite=False,
+            )
+
+    def test_skips_create_repo_when_existing_and_overwrite(self, monkeypatch):
+        ds = self._tiny_dataset()
+        fake_api = MagicMock()
+        fake_api.repo_exists.return_value = True
+        fake_api.whoami.return_value = {"name": "tester"}
+        perform = MagicMock()
+        push_card = MagicMock()
+        monkeypatch.setenv("HF_TOKEN", "fake-token")
+        monkeypatch.setattr(hf_push, "HfApi", lambda: fake_api)
+        monkeypatch.setattr(hf_push, "_perform_pushes", perform)
+        monkeypatch.setattr(hf_push, "_push_card", push_card)
+
+        hf_push.push_to_hf(
+            train=ds, validation=ds, retrieval=ds, smoke=ds,
+            repo_id="user/test", stats=self._stats(),
+            confirm=True, allow_overwrite=True,
+        )
+        fake_api.create_repo.assert_not_called()
+        perform.assert_called_once()
+
+
+class TestCLISmokePushGuard:
+    def test_smoke_push_requires_repo_override(self, monkeypatch, capsys):
+        monkeypatch.setattr("sys.argv", ["prepare_data.py", "--smoke", "--push"])
+        with pytest.raises(SystemExit):
+            prepare_data.main()

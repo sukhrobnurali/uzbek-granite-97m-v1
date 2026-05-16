@@ -20,12 +20,14 @@ CLI:
 from __future__ import annotations
 
 import argparse
+import datetime
 import random as _random
 from pathlib import Path
 
 from datasets import Dataset, concatenate_datasets
 
 from utils import dataset_io, dedup
+from utils.hf_push import push_to_hf
 from utils.logging_setup import configure
 from utils.translit import auto_detect_script, to_cyrillic, to_latin
 
@@ -37,6 +39,7 @@ log = configure()
 # explicitly via --sources tatoeba if a future parquet mirror appears.
 SOURCES_DEFAULT = ("parallel_opus", "opus100", "wiki")
 FORBIDDEN_SOURCES = ("flores_devtest_latn", "flores_devtest_cyrl")
+CANONICAL_REPO_ID = "sukhrobnurali/uzbek-embedding-pairs"
 
 
 def augment_mixscript(
@@ -238,7 +241,9 @@ def _source_distribution(ds: Dataset) -> dict[str, int]:
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    parser = argparse.ArgumentParser(
+        description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
+    )
     parser.add_argument("--smoke", action="store_true", help="Load 50 rows per source")
     parser.add_argument("--max-rows", type=int, default=None, help="Cap rows per source")
     parser.add_argument("--output-dir", default="data/processed", help="Where to write parquet")
@@ -252,7 +257,21 @@ def main() -> None:
     parser.add_argument("--near-dedup-num-perm", type=int, default=64)
     parser.add_argument("--wiki-holdout-size", type=int, default=5000)
     parser.add_argument("--wiki-seed", type=int, default=42)
+    parser.add_argument("--mixscript-ratio", type=float, default=0.10)
+    parser.add_argument("--mixscript-seed", type=int, default=42)
+    parser.add_argument("--push", action="store_true", help="Push to Hugging Face after building")
+    parser.add_argument("--confirm", action="store_true", help="Skip interactive 'yes' prompt")
+    parser.add_argument("--allow-overwrite", action="store_true",
+                        help="Allow pushing to an existing repo")
+    parser.add_argument("--repo-id", default=CANONICAL_REPO_ID,
+                        help="Override target repo (testing/forks)")
     args = parser.parse_args()
+
+    if args.smoke and args.push and args.repo_id == CANONICAL_REPO_ID:
+        raise SystemExit(
+            "Refusing to push a --smoke build to the canonical repo. "
+            "Pass --repo-id <your-test-repo> if you really want to push the smoke build."
+        )
 
     combined, wiki_holdout = build_pool(
         sources=tuple(args.sources),
@@ -264,19 +283,58 @@ def main() -> None:
         wiki_seed=args.wiki_seed,
     )
 
-    distribution = _source_distribution(combined)
-    log.info("Source distribution: %s", distribution)
+    log.info("Building mix-script augmentation ...")
+    mix_aug = augment_mixscript(combined, target_ratio=args.mixscript_ratio,
+                                 seed=args.mixscript_seed)
+    log.info("Mixscript rows: %d (%.1f%% of final)",
+             len(mix_aug),
+             len(mix_aug) / (len(combined) + len(mix_aug)) * 100 if len(mix_aug) > 0 else 0.0)
+    train_pool = concatenate_datasets([combined, mix_aug]) if len(mix_aug) > 0 else combined
 
     output_dir = Path(args.output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
-    output_path = output_dir / "default.parquet"
-    combined.to_parquet(str(output_path))
-    log.info("Wrote %d rows to %s", len(combined), output_path)
+    train_pool.to_parquet(str(output_dir / "default.parquet"))
+    log.info("Wrote %d rows to %s", len(train_pool), output_dir / "default.parquet")
 
     if wiki_holdout is not None:
-        holdout_path = output_dir / "wiki_retrieval_eval.parquet"
-        wiki_holdout.to_parquet(str(holdout_path))
-        log.info("Wrote %d wiki holdout rows to %s", len(wiki_holdout), holdout_path)
+        wiki_holdout.to_parquet(str(output_dir / "wiki_retrieval_eval.parquet"))
+
+    if not args.push:
+        return
+
+    log.info("Building validation split ...")
+    validation, cyrl_source = build_validation()
+    log.info("Validation rows: %d (cyrl_source=%s)", len(validation), cyrl_source)
+
+    log.info("Building smoke_100 ...")
+    smoke = build_smoke_100(train_pool)
+
+    if wiki_holdout is None:
+        raise SystemExit("Wiki holdout was not built; cannot push wiki_retrieval_eval config.")
+
+    stats = {
+        "repo_id": args.repo_id,
+        "train_rows": len(train_pool),
+        "validation_rows": len(validation),
+        "retrieval_rows": len(wiki_holdout),
+        "smoke_rows": len(smoke),
+        "source_distribution": _source_distribution(train_pool),
+        "mixscript_ratio": args.mixscript_ratio,
+        "validation_cyrl_source": cyrl_source,
+        "near_dedup_threshold": args.near_dedup_threshold,
+        "generation_date": datetime.date.today().isoformat(),
+    }
+
+    push_to_hf(
+        train=train_pool,
+        validation=validation,
+        retrieval=wiki_holdout,
+        smoke=smoke,
+        repo_id=args.repo_id,
+        stats=stats,
+        confirm=args.confirm,
+        allow_overwrite=args.allow_overwrite,
+    )
 
 
 if __name__ == "__main__":

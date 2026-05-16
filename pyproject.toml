@@ -20,6 +20,9 @@ ignore = [
 
 [tool.ruff.lint.per-file-ignores]
 "tests/*" = ["B011"]  # assert False used intentionally in tests
+# Cyrillic<->Latin mappings deliberately mix visually similar characters.
+"utils/translit.py" = ["RUF001", "RUF002", "RUF003"]
+"tests/test_translit.py" = ["RUF001", "RUF002", "RUF003"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

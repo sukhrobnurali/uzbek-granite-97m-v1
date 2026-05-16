@@ -23,6 +23,7 @@ ignore = [
 # Cyrillic<->Latin mappings and Uzbek text constants deliberately mix visually similar characters.
 "utils/translit.py" = ["RUF001", "RUF002", "RUF003"]
 "utils/dataset_io.py" = ["RUF001", "RUF002", "RUF003"]
+"utils/dataset_card.py" = ["RUF001", "RUF002", "RUF003"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

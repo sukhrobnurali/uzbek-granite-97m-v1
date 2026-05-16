@@ -213,3 +213,42 @@ class TestBuildValidation:
         monkeypatch.setattr(prepare_data.dataset_io, "load_source", fake_load)
         with pytest.raises(RuntimeError, match="flores_dev_latn"):
             prepare_data.build_validation()
+
+
+class TestSmoke100:
+    def test_size_and_strata(self):
+        pool = Dataset.from_list(
+            [{"anchor": f"a{i}", "positive": f"b{i}", "source": "parallel_opus",
+              "anchor_lang": "uz_Latn", "positive_lang": "en"} for i in range(341)] +
+            [{"anchor": f"c{i}", "positive": f"d{i}", "source": "wiki",
+              "anchor_lang": "uz_Latn", "positive_lang": "uz_Latn"} for i in range(559)] +
+            [{"anchor": f"e{i}", "positive": f"f{i}", "source": "mixscript",
+              "anchor_lang": "uz_Latn", "positive_lang": "uz_Cyrl"} for i in range(100)]
+        )
+        smoke = prepare_data.build_smoke_100(pool, seed=42)
+        assert len(smoke) == 100
+        counts: dict[str, int] = {}
+        for r in smoke:
+            counts[r["source"]] = counts.get(r["source"], 0) + 1
+        assert abs(counts.get("parallel_opus", 0) - 34) <= 3
+        assert abs(counts.get("wiki", 0) - 56) <= 3
+        assert abs(counts.get("mixscript", 0) - 10) <= 3
+
+    def test_deterministic(self):
+        pool = Dataset.from_list(
+            [{"anchor": f"a{i}", "positive": f"b{i}", "source": "parallel_opus",
+              "anchor_lang": "uz_Latn", "positive_lang": "en"} for i in range(500)] +
+            [{"anchor": f"c{i}", "positive": f"d{i}", "source": "wiki",
+              "anchor_lang": "uz_Latn", "positive_lang": "uz_Latn"} for i in range(500)]
+        )
+        s1 = prepare_data.build_smoke_100(pool, seed=42)
+        s2 = prepare_data.build_smoke_100(pool, seed=42)
+        assert list(s1["anchor"]) == list(s2["anchor"])
+
+    def test_pool_smaller_than_100_returns_all(self):
+        pool = Dataset.from_list(
+            [{"anchor": f"a{i}", "positive": f"b{i}", "source": "parallel_opus",
+              "anchor_lang": "uz_Latn", "positive_lang": "en"} for i in range(50)]
+        )
+        smoke = prepare_data.build_smoke_100(pool, seed=42)
+        assert len(smoke) == 50

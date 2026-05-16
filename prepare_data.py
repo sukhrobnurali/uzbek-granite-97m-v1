@@ -131,6 +131,32 @@ def build_validation() -> tuple[Dataset, str]:
     return concatenate_datasets([latn, translit]), "transliterated"
 
 
+def build_smoke_100(pool: Dataset, seed: int = 42, target_size: int = 100) -> Dataset:
+    """Return a stratified-by-source sample of `target_size` rows (or all rows if smaller)."""
+    if len(pool) <= target_size:
+        return pool
+
+    by_source: dict[str, list[int]] = {}
+    for i, src in enumerate(pool["source"]):
+        by_source.setdefault(src, []).append(i)
+
+    rng = _random.Random(seed)
+    sampled: list[int] = []
+    for _src, idxs in by_source.items():
+        n = max(1, round(target_size * len(idxs) / len(pool)))
+        n = min(n, len(idxs))
+        sampled.extend(rng.sample(idxs, n))
+
+    if len(sampled) > target_size:
+        sampled = rng.sample(sampled, target_size)
+    elif len(sampled) < target_size:
+        remaining = [i for i in range(len(pool)) if i not in set(sampled)]
+        sampled.extend(rng.sample(remaining, target_size - len(sampled)))
+
+    sampled.sort()
+    return pool.select(sampled)
+
+
 def build_pool(
     sources: tuple[str, ...] = SOURCES_DEFAULT,
     smoke: bool = False,

@@ -27,7 +27,7 @@ from datasets import Dataset, concatenate_datasets
 
 from utils import dataset_io, dedup
 from utils.logging_setup import configure
-from utils.translit import to_cyrillic, to_latin
+from utils.translit import auto_detect_script, to_cyrillic, to_latin
 
 log = configure()
 
@@ -98,6 +98,37 @@ def augment_mixscript(
             break
 
     return Dataset.from_list(rows)
+
+
+def build_validation() -> tuple[Dataset, str]:
+    """Build the FLORES-dev validation split.
+
+    Returns (validation_dataset, cyrl_source) where cyrl_source is "native"
+    if FLORES uzn_Cyrl-eng_Latn loaded, else "transliterated" (we synthesize
+    Cyrillic anchors from the Latn dev split using utils.translit.to_cyrillic).
+    """
+    latn = dataset_io.load_source("flores_dev_latn")
+    if latn is None:
+        raise RuntimeError(
+            "flores_dev_latn (Muennighoff/flores200, uzn_Latn-eng_Latn dev) failed to load; "
+            "cannot build validation split."
+        )
+    cyrl = dataset_io.load_source("flores_dev_cyrl")
+    if cyrl is not None:
+        return concatenate_datasets([latn, cyrl]), "native"
+
+    def _translit_row(row: dict) -> dict:
+        new_anchor = to_cyrillic(row["anchor"])
+        return {
+            "anchor": new_anchor,
+            "positive": row["positive"],
+            "source": "flores_dev_cyrl_translit",
+            "anchor_lang": auto_detect_script(new_anchor),
+            "positive_lang": row["positive_lang"],
+        }
+
+    translit = latn.map(_translit_row)
+    return concatenate_datasets([latn, translit]), "transliterated"
 
 
 def build_pool(

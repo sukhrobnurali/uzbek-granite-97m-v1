@@ -137,3 +137,79 @@ class TestMixscriptAug:
         for row in aug:
             assert row["anchor_lang"] == "uz_Cyrl"
             assert row["positive_lang"] == "uz_Latn"
+
+
+class TestBuildValidation:
+    @staticmethod
+    def _latn() -> Dataset:
+        return Dataset.from_list([
+            {
+                "anchor": f"Toshkent shahar {i}",
+                "positive": f"Tashkent city {i}",
+                "source": "flores_dev_latn",
+                "anchor_lang": "uz_Latn",
+                "positive_lang": "en",
+            }
+            for i in range(100)
+        ])
+
+    @staticmethod
+    def _cyrl() -> Dataset:
+        return Dataset.from_list([
+            {
+                "anchor": f"Тошкент шаҳар {i}",
+                "positive": f"Tashkent city {i}",
+                "source": "flores_dev_cyrl",
+                "anchor_lang": "uz_Cyrl",
+                "positive_lang": "en",
+            }
+            for i in range(100)
+        ])
+
+    def test_native_cyrl_when_available(self, monkeypatch):
+        latn = self._latn()
+        cyrl = self._cyrl()
+
+        def fake_load(name, **kwargs):
+            return {"flores_dev_latn": latn, "flores_dev_cyrl": cyrl}.get(name)
+
+        monkeypatch.setattr(prepare_data.dataset_io, "load_source", fake_load)
+        val, cyrl_source = prepare_data.build_validation()
+
+        assert cyrl_source == "native"
+        sources = set(val["source"])
+        assert "flores_dev_latn" in sources
+        assert "flores_dev_cyrl" in sources
+        assert "flores_dev_cyrl_translit" not in sources
+        assert len(val) == 200
+
+    def test_translit_fallback_when_cyrl_missing(self, monkeypatch):
+        latn = self._latn()
+
+        def fake_load(name, **kwargs):
+            if name == "flores_dev_latn":
+                return latn
+            if name == "flores_dev_cyrl":
+                return None
+            raise KeyError(name)
+
+        monkeypatch.setattr(prepare_data.dataset_io, "load_source", fake_load)
+        val, cyrl_source = prepare_data.build_validation()
+
+        assert cyrl_source == "transliterated"
+        sources = set(val["source"])
+        assert "flores_dev_latn" in sources
+        assert "flores_dev_cyrl_translit" in sources
+        assert "flores_dev_cyrl" not in sources
+        translit_rows = val.filter(lambda r: r["source"] == "flores_dev_cyrl_translit")
+        assert len(translit_rows) == 100
+        for row in translit_rows:
+            assert row["anchor_lang"] == "uz_Cyrl"
+
+    def test_raises_when_latn_missing(self, monkeypatch):
+        def fake_load(name, **kwargs):
+            return None
+
+        monkeypatch.setattr(prepare_data.dataset_io, "load_source", fake_load)
+        with pytest.raises(RuntimeError, match="flores_dev_latn"):
+            prepare_data.build_validation()

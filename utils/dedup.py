@@ -17,6 +17,9 @@ def exact_dedup(ds: Dataset, fields: tuple[str, ...] = ("anchor", "positive")) -
     return ds.select(keep)
 
 
+JOINT_SEP = " ||| "
+
+
 def _shingle_minhash(text: str, num_perm: int = 64, shingle_size: int = 2) -> MinHash:
     mh = MinHash(num_perm=num_perm)
     words = (text or "").lower().split()
@@ -31,18 +34,27 @@ def _shingle_minhash(text: str, num_perm: int = 64, shingle_size: int = 2) -> Mi
     return mh
 
 
+def _joint_text(row: dict, fields: tuple[str, ...]) -> str:
+    return JOINT_SEP.join((row.get(f) or "") for f in fields)
+
+
 def near_dedup_minhash(
     ds: Dataset,
-    field: str = "anchor",
+    fields: tuple[str, ...] = ("anchor", "positive"),
     threshold: float = 0.9,
     num_perm: int = 64,
     shingle_size: int = 2,
 ) -> Dataset:
-    """Drop near-duplicates on `field` using MinHashLSH (Jaccard similarity)."""
+    """Drop near-duplicates on the joint key over `fields` using MinHashLSH (Jaccard).
+
+    Hashing the concatenation of both columns prevents collapsing distinct (uz, en)
+    pairs that happen to share short Uzbek phrasing — common in OPUS-100 where the
+    median Uzbek anchor is ~6 words.
+    """
     lsh = MinHashLSH(threshold=threshold, num_perm=num_perm)
     keep: list[int] = []
     for i, row in enumerate(ds):
-        mh = _shingle_minhash(row[field], num_perm=num_perm, shingle_size=shingle_size)
+        mh = _shingle_minhash(_joint_text(row, fields), num_perm=num_perm, shingle_size=shingle_size)
         if lsh.query(mh):
             continue
         lsh.insert(str(i), mh)

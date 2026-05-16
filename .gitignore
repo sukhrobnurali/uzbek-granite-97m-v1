@@ -23,6 +23,13 @@ hf_cache/
 wandb/
 *.parquet
 !tests/fixtures/*.parquet
+data/processed/
+
+# Run logs
+*.log
+
+# Claude Code session data
+.claude/
 
 # Eval outputs — keep the JSONs themselves, ignore stray binaries
 results/*.bin

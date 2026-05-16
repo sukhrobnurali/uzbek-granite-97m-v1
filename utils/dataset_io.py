@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+import random
 import re
 from typing import Any
 
@@ -15,6 +16,7 @@ UNIFIED_COLS = ["anchor", "positive", "source", "anchor_lang", "positive_lang"]
 # Filter thresholds (matches the plan's pipeline filters).
 MIN_LEN = 5
 MAX_LEN = 512
+WIKI_MAX_LEN = 2000  # wiki positives are 80-word paragraphs (~600-1000 chars typical)
 MIN_WORDS = 2
 MIN_LEN_RATIO = 0.4
 MAX_LEN_RATIO = 2.5
@@ -69,13 +71,21 @@ def passes_filters(row: dict, uzbek_field: str = "anchor") -> bool:
     p = row.get("positive") or ""
     if not a or not p:
         return False
-    if not (MIN_LEN <= len(a) <= MAX_LEN and MIN_LEN <= len(p) <= MAX_LEN):
+    is_wiki = row.get("source") == "wiki"
+    # Wiki positives are 80-word paragraphs (often ~600-1000 chars), and wiki
+    # anchors are titles (often 1 word like "Toshkent"). Both the per-side MAX_LEN
+    # and the 0.4-2.5 length ratio are too tight for the title/paragraph geometry.
+    # The 80-word cap in transform_wiki is the real upper bound for wiki positives.
+    p_max_len = WIKI_MAX_LEN if is_wiki else MAX_LEN
+    if not (MIN_LEN <= len(a) <= MAX_LEN and MIN_LEN <= len(p) <= p_max_len):
         return False
-    if _word_count(a) < MIN_WORDS or _word_count(p) < MIN_WORDS:
+    min_words_anchor = 1 if is_wiki else MIN_WORDS
+    if _word_count(a) < min_words_anchor or _word_count(p) < MIN_WORDS:
         return False
-    ratio = len(a) / len(p)
-    if ratio < MIN_LEN_RATIO or ratio > MAX_LEN_RATIO:
-        return False
+    if not is_wiki:
+        ratio = len(a) / len(p)
+        if ratio < MIN_LEN_RATIO or ratio > MAX_LEN_RATIO:
+            return False
     if a.lower() == p.lower():
         return False
     uz_text = row.get(uzbek_field) or ""
@@ -168,7 +178,10 @@ def transform_tatoeba(
 
 
 def filter_dataset(ds: Dataset) -> Dataset:
-    return ds.filter(passes_filters)
+    # load_from_cache_file=False: passes_filters is a closure over module-level
+    # constants (MIN_LEN, WIKI_MAX_LEN, etc.) whose changes don't always invalidate
+    # HF datasets' fingerprint. Cheap to recompute (~1s/100k rows), so always re-run.
+    return ds.filter(passes_filters, load_from_cache_file=False)
 
 
 _LOADERS: dict[str, dict[str, Any]] = {
@@ -244,3 +257,58 @@ def load_source(name: str, smoke: bool = False, max_rows: int | None = None) -> 
     elif max_rows is not None:
         ds = ds.select(range(min(max_rows, len(ds))))
     return spec["transform"](ds)
+
+
+def _split_wiki_filtered(
+    filtered: Dataset, holdout_size: int, seed: int
+) -> tuple[Dataset, Dataset]:
+    """Pure function: deterministic train/holdout split of a transformed+filtered wiki dataset.
+
+    Returns (train_pool, holdout). Holdout is taken from the filtered survivors so the
+    eval distribution matches training distribution; same seed always yields the same split.
+    Raises ValueError if there are fewer rows than the requested holdout.
+    """
+    if holdout_size <= 0:
+        raise ValueError(f"holdout_size must be positive, got {holdout_size}")
+    if holdout_size >= len(filtered):
+        raise ValueError(
+            f"holdout_size {holdout_size} >= filtered wiki rows {len(filtered)}; "
+            f"increase max_rows or shrink holdout."
+        )
+    indices = list(range(len(filtered)))
+    random.Random(seed).shuffle(indices)
+    holdout_idx = sorted(indices[:holdout_size])
+    train_idx = sorted(indices[holdout_size:])
+    return filtered.select(train_idx), filtered.select(holdout_idx)
+
+
+def load_wiki_split(
+    holdout_size: int = 5000,
+    seed: int = 42,
+    smoke: bool = False,
+    max_rows: int | None = None,
+) -> tuple[Dataset, Dataset] | None:
+    """Load yakhyo/uz-wiki, transform+filter, then split into (train, holdout).
+
+    Smoke mode scales the holdout down to ~10% of loaded rows so a 50-article smoke
+    doesn't try to hold out 5000. Returns None if the wiki dataset is unavailable.
+    """
+    spec = _LOADERS["wiki"]
+    try:
+        raw = load_dataset(spec["hf_id"], split=spec["split"])
+    except Exception as exc:
+        log.warning("Could not load wiki (%s): %s", spec["hf_id"], exc)
+        return None
+    if smoke:
+        raw = raw.select(range(min(200, len(raw))))
+        holdout_size = max(1, len(raw) // 10)
+    elif max_rows is not None:
+        raw = raw.select(range(min(max_rows, len(raw))))
+
+    transformed = transform_wiki(raw)
+    filtered = filter_dataset(transformed)
+    if len(filtered) <= holdout_size:
+        # Defensive: shrink holdout to at most 10% of survivors so smoke modes
+        # never bottom out on tiny corpora.
+        holdout_size = max(1, len(filtered) // 10)
+    return _split_wiki_filtered(filtered, holdout_size=holdout_size, seed=seed)

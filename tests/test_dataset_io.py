@@ -3,6 +3,7 @@ from datasets import Dataset
 
 from utils.dataset_io import (
     UNIFIED_COLS,
+    _split_wiki_filtered,
     filter_dataset,
     is_valid_uzbek_side,
     passes_filters,
@@ -186,6 +187,48 @@ def test_passes_filters_rejects_empty():
     assert passes_filters(row2) is False
 
 
+def test_passes_filters_wiki_allows_single_word_title():
+    """Wiki anchors are titles like 'Toshkent' — single words must pass."""
+    row = {
+        "anchor": "Toshkent",
+        "positive": "Toshkent shahri Oʻzbekistonning poytaxti hisoblanadi va eng katta shahar.",
+        "source": "wiki",
+        "anchor_lang": "uz_Latn",
+        "positive_lang": "uz_Latn",
+    }
+    assert passes_filters(row) is True
+
+
+def test_passes_filters_wiki_allows_short_to_long_ratio():
+    """Wiki title (3 words) vs paragraph (80 words) blows past the global 0.4-2.5 ratio
+    AND the 512-char MAX_LEN — both must be relaxed for wiki specifically.
+    """
+    title = "Andijon shahri tarixi"
+    # 80 words of typical Uzbek length -> well over 512 chars, matching real wiki data
+    paragraph = " ".join(["Andijon"] + ["qadimiy"] * 79)
+    assert len(paragraph) > 512  # sanity: this would fail the global MAX_LEN
+    row = {
+        "anchor": title,
+        "positive": paragraph,
+        "source": "wiki",
+        "anchor_lang": "uz_Latn",
+        "positive_lang": "uz_Latn",
+    }
+    assert passes_filters(row) is True
+
+
+def test_passes_filters_non_wiki_still_requires_two_words():
+    """Wiki exception is source-scoped — OPUS-100 single-word anchors still rejected."""
+    row = {
+        "anchor": "Toshkent",
+        "positive": "Tashkent is great.",
+        "source": "opus100",
+        "anchor_lang": "uz_Latn",
+        "positive_lang": "en",
+    }
+    assert passes_filters(row) is False
+
+
 def test_passes_filters_rejects_uzbek_side_without_vowels():
     row = {
         "anchor": ".....!!!!!",
@@ -235,3 +278,48 @@ def test_unknown_source_raises():
 
     with pytest.raises(KeyError):
         load_source("does_not_exist")
+
+
+def _fake_filtered_wiki(n: int) -> Dataset:
+    return Dataset.from_list([
+        {
+            "anchor": f"Title {i}",
+            "positive": f"Article {i} body text with several words to pass filters.",
+            "source": "wiki",
+            "anchor_lang": "uz_Latn",
+            "positive_lang": "uz_Latn",
+        }
+        for i in range(n)
+    ])
+
+
+def test_split_wiki_filtered_is_reproducible_with_same_seed():
+    ds = _fake_filtered_wiki(50)
+    train_a, hold_a = _split_wiki_filtered(ds, holdout_size=10, seed=42)
+    train_b, hold_b = _split_wiki_filtered(ds, holdout_size=10, seed=42)
+    assert list(hold_a["anchor"]) == list(hold_b["anchor"])
+    assert list(train_a["anchor"]) == list(train_b["anchor"])
+
+
+def test_split_wiki_filtered_different_seeds_differ():
+    ds = _fake_filtered_wiki(50)
+    _, hold_a = _split_wiki_filtered(ds, holdout_size=10, seed=42)
+    _, hold_b = _split_wiki_filtered(ds, holdout_size=10, seed=1)
+    assert set(hold_a["anchor"]) != set(hold_b["anchor"])
+
+
+def test_split_wiki_filtered_no_overlap():
+    ds = _fake_filtered_wiki(50)
+    train, holdout = _split_wiki_filtered(ds, holdout_size=10, seed=42)
+    assert len(train) == 40
+    assert len(holdout) == 10
+    assert set(train["anchor"]) & set(holdout["anchor"]) == set()
+    assert set(train["anchor"]) | set(holdout["anchor"]) == set(ds["anchor"])
+
+
+def test_split_wiki_filtered_rejects_oversized_holdout():
+    ds = _fake_filtered_wiki(10)
+    with pytest.raises(ValueError):
+        _split_wiki_filtered(ds, holdout_size=10, seed=42)
+    with pytest.raises(ValueError):
+        _split_wiki_filtered(ds, holdout_size=0, seed=42)

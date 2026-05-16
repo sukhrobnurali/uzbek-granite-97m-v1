@@ -1,18 +1,20 @@
 """Build the uzbek-embedding-pairs dataset.
 
-Task 5 scope: OPUS-100 (en-uz) -> unified schema -> filter -> dedup -> local parquet.
+Multi-source pipeline:
+  OPUS-100 + parallel-sentences-opus-100 + yakhyo/uz-wiki + Helsinki-NLP/tatoeba_mt
+  -> unified schema -> filter -> exact + joint-key near dedup
+  -> data/processed/default.parquet (train pool)
+  -> data/processed/wiki_retrieval_eval.parquet (5000 wiki articles held out for retrieval eval)
 
-Future expansion (Tasks 6-7):
-  - Add parallel-sentences-opus-100, FLORES dev, yakhyo/uz-wiki, Tatoeba MT
-  - Wiki holdout 5000 rows -> wiki_retrieval_eval config
-  - Mix-script augmentation at 10% via utils.translit
-  - Push to sukhrobnurali/uzbek-embedding-pairs with DatasetCard
+FLORES-200 devtest is reserved for eval and is rejected here; FLORES dev becomes the
+validation split when the dataset is pushed to HF (Task 7).
 
 CLI:
-    python prepare_data.py                          # full OPUS-100 -> data/processed/default.parquet
-    python prepare_data.py --smoke                  # 50 rows
-    python prepare_data.py --max-rows 5000          # cap source size
-    python prepare_data.py --output-dir mydata      # custom output dir
+    python prepare_data.py                          # default sources, full data
+    python prepare_data.py --smoke                  # 50 rows per source, scaled wiki holdout
+    python prepare_data.py --max-rows 5000          # cap rows per source
+    python prepare_data.py --sources opus100        # subset of sources
+    python prepare_data.py --wiki-holdout-size 3000
 """
 
 from __future__ import annotations
@@ -27,7 +29,12 @@ from utils.logging_setup import configure
 
 log = configure()
 
-SOURCES_DEFAULT = ("opus100",)
+# parallel_opus first so exact_dedup keeps its cleaner formatting on OPUS-100
+# collisions. tatoeba dropped from defaults because Helsinki-NLP/tatoeba_mt is a
+# loading-script dataset, unsupported by datasets>=3.0. It can still be requested
+# explicitly via --sources tatoeba if a future parquet mirror appears.
+SOURCES_DEFAULT = ("parallel_opus", "opus100", "wiki")
+FORBIDDEN_SOURCES = ("flores_devtest_latn", "flores_devtest_cyrl")
 
 
 def build_pool(
@@ -36,10 +43,43 @@ def build_pool(
     max_rows: int | None = None,
     near_dedup_threshold: float = 0.9,
     near_dedup_num_perm: int = 64,
-) -> Dataset:
+    wiki_holdout_size: int = 5000,
+    wiki_seed: int = 42,
+) -> tuple[Dataset, Dataset | None]:
+    """Build the training pool and (optionally) hold out wiki rows for retrieval eval.
+
+    Returns (combined_pool, wiki_holdout_or_None). Holdout is None when "wiki" is not
+    in `sources` or the wiki dataset failed to load.
+    """
+    for forbidden in FORBIDDEN_SOURCES:
+        if forbidden in sources:
+            raise ValueError(
+                f"{forbidden} is FLORES-200 devtest and is reserved for eval.py — "
+                f"never load it in prepare_data."
+            )
+
     pool: list[Dataset] = []
+    wiki_holdout: Dataset | None = None
+
     for name in sources:
         log.info("Loading %s ...", name)
+        if name == "wiki":
+            result = dataset_io.load_wiki_split(
+                holdout_size=wiki_holdout_size,
+                seed=wiki_seed,
+                smoke=smoke,
+                max_rows=max_rows,
+            )
+            if result is None:
+                log.warning("wiki unavailable; skipping.")
+                continue
+            train_wiki, wiki_holdout = result
+            log.info(
+                "  wiki -> %d train rows + %d holdout rows", len(train_wiki), len(wiki_holdout)
+            )
+            pool.append(train_wiki)
+            continue
+
         ds = dataset_io.load_source(name, smoke=smoke, max_rows=max_rows)
         if ds is None:
             log.warning("Source %s unavailable; skipping.", name)
@@ -61,13 +101,13 @@ def build_pool(
 
     combined = dedup.near_dedup_minhash(
         combined,
-        field="anchor",
+        fields=("anchor", "positive"),
         threshold=near_dedup_threshold,
         num_perm=near_dedup_num_perm,
     )
-    log.info("After near dedup (threshold=%.2f): %d rows", near_dedup_threshold, len(combined))
+    log.info("After near dedup (threshold=%.2f, joint): %d rows", near_dedup_threshold, len(combined))
 
-    return combined
+    return combined, wiki_holdout
 
 
 def _source_distribution(ds: Dataset) -> dict[str, int]:
@@ -90,14 +130,18 @@ def main() -> None:
     )
     parser.add_argument("--near-dedup-threshold", type=float, default=0.9)
     parser.add_argument("--near-dedup-num-perm", type=int, default=64)
+    parser.add_argument("--wiki-holdout-size", type=int, default=5000)
+    parser.add_argument("--wiki-seed", type=int, default=42)
     args = parser.parse_args()
 
-    combined = build_pool(
+    combined, wiki_holdout = build_pool(
         sources=tuple(args.sources),
         smoke=args.smoke,
         max_rows=args.max_rows,
         near_dedup_threshold=args.near_dedup_threshold,
         near_dedup_num_perm=args.near_dedup_num_perm,
+        wiki_holdout_size=args.wiki_holdout_size,
+        wiki_seed=args.wiki_seed,
     )
 
     distribution = _source_distribution(combined)
@@ -108,6 +152,11 @@ def main() -> None:
     output_path = output_dir / "default.parquet"
     combined.to_parquet(str(output_path))
     log.info("Wrote %d rows to %s", len(combined), output_path)
+
+    if wiki_holdout is not None:
+        holdout_path = output_dir / "wiki_retrieval_eval.parquet"
+        wiki_holdout.to_parquet(str(holdout_path))
+        log.info("Wrote %d wiki holdout rows to %s", len(wiki_holdout), holdout_path)
 
 
 if __name__ == "__main__":

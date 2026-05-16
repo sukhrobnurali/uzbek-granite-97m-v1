@@ -1,0 +1,237 @@
+import pytest
+from datasets import Dataset
+
+from utils.dataset_io import (
+    UNIFIED_COLS,
+    filter_dataset,
+    is_valid_uzbek_side,
+    passes_filters,
+    transform_flores,
+    transform_opus100,
+    transform_parallel_opus,
+    transform_tatoeba,
+    transform_wiki,
+)
+
+
+def make_opus100_fixture():
+    return Dataset.from_dict({
+        "translation": [
+            {"en": "Tashkent is the capital.", "uz": "Toshkent — poytaxt."},
+            {"en": "Hello world.", "uz": "Salom dunyo."},
+            {"en": "Bukhara is a city.", "uz": "Buxoro — shahar."},
+        ]
+    })
+
+
+def make_parallel_opus_fixture():
+    return Dataset.from_dict({
+        "english": ["Tashkent is the capital.", "Bukhara is a city."],
+        "non_english": ["Toshkent — poytaxt.", "Buxoro — shahar."],
+    })
+
+
+def make_flores_fixture():
+    return Dataset.from_dict({
+        "id": [1, 2],
+        "URL": ["http://example.com/1", "http://example.com/2"],
+        "domain": ["wikinews", "wikibooks"],
+        "topic": ["politics", "history"],
+        "sentence_uzn_Latn": [
+            "Bugun Toshkentda yomgʻir yogʻdi.",
+            "Samarqand qadimiy shahar hisoblanadi.",
+        ],
+        "sentence_eng_Latn": [
+            "It rained in Tashkent today.",
+            "Samarkand is considered an ancient city.",
+        ],
+    })
+
+
+def make_wiki_fixture():
+    return Dataset.from_dict({
+        "id": ["1", "2", "3", "4"],
+        "title": [
+            "Toshkent",
+            "Roʻyxat: Oʻzbekiston shaharlari",
+            "Stub",
+            "Andijon",
+        ],
+        "text": [
+            (
+                "Toshkent — Oʻzbekiston Respublikasining poytaxti va eng yirik shahri. "
+                "Aholisi 2024-yil holatiga koʻra 2,8 million kishidan iborat. Shahar "
+                "Markaziy Osiyoning eng muhim siyosiy, iqtisodiy va madaniy markazlaridan "
+                "biridir. Toshkent metropoliteni 1977-yilda ochilgan va Markaziy Osiyodagi "
+                "birinchi metro tizimidir. Shahar Chirchiq daryosi sohilida joylashgan."
+            ),
+            "Bu sahifa Oʻzbekiston shaharlarining roʻyxatini taqdim etadi.",
+            "Stub artikl, juda qisqa.",
+            (
+                "Andijon — Oʻzbekistonning sharqida joylashgan shahar va Andijon "
+                "viloyatining maʼmuriy markazi. Fargʻona vodiysining yirik shaharlaridan "
+                "biri hisoblanadi. Aholisi yarim millionga yaqin. Andijon qadimiy "
+                "shaharlardan boʻlib, tarixi 2500 yildan ortiqroqqa borib taqaladi. "
+                "Bobur Mirzoning vatani sifatida ham mashhurdir."
+            ),
+        ],
+    })
+
+
+def make_tatoeba_fixture():
+    return Dataset.from_dict({
+        "sourceString": ["Salom dunyo.", "Hello world."],
+        "targetString": ["Hello world.", "Salom dunyo."],
+        "sourceLang": ["uzb", "eng"],
+        "targetLang": ["eng", "uzb"],
+    })
+
+
+def test_opus100_transform_returns_unified_schema():
+    ds = transform_opus100(make_opus100_fixture())
+    assert set(ds.column_names) == set(UNIFIED_COLS)
+    assert len(ds) == 3
+    assert ds[0]["anchor"] == "Toshkent — poytaxt."
+    assert ds[0]["positive"] == "Tashkent is the capital."
+    assert ds[0]["source"] == "opus100"
+    assert ds[0]["anchor_lang"] == "uz_Latn"
+
+
+def test_parallel_opus_transform_returns_unified_schema():
+    ds = transform_parallel_opus(make_parallel_opus_fixture())
+    assert set(ds.column_names) == set(UNIFIED_COLS)
+    assert ds[0]["anchor"] == "Toshkent — poytaxt."
+    assert ds[0]["positive"] == "Tashkent is the capital."
+    assert ds[0]["source"] == "parallel_opus"
+
+
+def test_flores_transform_returns_unified_schema():
+    ds = transform_flores(make_flores_fixture())
+    assert set(ds.column_names) == set(UNIFIED_COLS)
+    assert "Toshkentda" in ds[0]["anchor"]
+    assert ds[0]["source"] == "flores"
+
+
+def test_wiki_transform_drops_bad_articles():
+    ds = transform_wiki(make_wiki_fixture())
+    sources = ds.unique("source")
+    assert sources == ["wiki"]
+    titles_kept = [row["anchor"] for row in ds]
+    assert "Toshkent" in titles_kept
+    assert "Andijon" in titles_kept
+    assert "Roʻyxat: Oʻzbekiston shaharlari" not in titles_kept
+    assert "Stub" not in titles_kept
+
+
+def test_wiki_pair_is_title_to_paragraph():
+    ds = transform_wiki(make_wiki_fixture())
+    toshkent_row = next(r for r in ds if r["anchor"] == "Toshkent")
+    assert toshkent_row["positive"].startswith("Toshkent")
+    assert len(toshkent_row["positive"].split()) <= 80
+
+
+def test_tatoeba_transform_anchors_uzbek_side():
+    ds = transform_tatoeba(make_tatoeba_fixture())
+    assert ds[0]["anchor"] == "Salom dunyo."  # sourceLang=uzb -> anchor=src
+    assert ds[1]["anchor"] == "Salom dunyo."  # sourceLang=eng -> anchor=trg (the uz one)
+
+
+def test_passes_filters_accepts_valid_pair():
+    row = {
+        "anchor": "Toshkent — Oʻzbekistonning poytaxti.",
+        "positive": "Tashkent is the capital of Uzbekistan.",
+        "source": "opus100",
+        "anchor_lang": "uz_Latn",
+        "positive_lang": "en",
+    }
+    assert passes_filters(row) is True
+
+
+def test_passes_filters_rejects_too_short():
+    row = {"anchor": "Hi", "positive": "Salom", "source": "x", "anchor_lang": "uz_Latn", "positive_lang": "en"}
+    assert passes_filters(row) is False
+
+
+def test_passes_filters_rejects_one_word_sides():
+    row = {"anchor": "Toshkent.", "positive": "Tashkent.", "source": "x", "anchor_lang": "uz_Latn", "positive_lang": "en"}
+    assert passes_filters(row) is False
+
+
+def test_passes_filters_rejects_extreme_length_ratio():
+    row = {
+        "anchor": "Toshkent shahri.",
+        "positive": "Tashkent is the capital of Uzbekistan, a very large and historic city in Central Asia with a long history dating back many centuries.",
+        "source": "x",
+        "anchor_lang": "uz_Latn",
+        "positive_lang": "en",
+    }
+    assert passes_filters(row) is False
+
+
+def test_passes_filters_rejects_identity():
+    row = {
+        "anchor": "Hello world hello.",
+        "positive": "Hello World Hello.",
+        "source": "x",
+        "anchor_lang": "en",
+        "positive_lang": "en",
+    }
+    assert passes_filters(row) is False
+
+
+def test_passes_filters_rejects_empty():
+    row = {"anchor": "", "positive": "Tashkent is the capital.", "source": "x", "anchor_lang": "uz_Latn", "positive_lang": "en"}
+    assert passes_filters(row) is False
+    row2 = {"anchor": "Toshkent — poytaxt.", "positive": "", "source": "x", "anchor_lang": "uz_Latn", "positive_lang": "en"}
+    assert passes_filters(row2) is False
+
+
+def test_passes_filters_rejects_uzbek_side_without_vowels():
+    row = {
+        "anchor": ".....!!!!!",
+        "positive": "Tashkent is the capital.",
+        "source": "x",
+        "anchor_lang": "uz_Latn",
+        "positive_lang": "en",
+    }
+    assert passes_filters(row) is False
+
+
+def test_is_valid_uzbek_side_latin():
+    assert is_valid_uzbek_side("Toshkent shahri") is True
+    assert is_valid_uzbek_side("...!!!") is False
+    assert is_valid_uzbek_side("") is False
+    assert is_valid_uzbek_side("123 456") is False
+
+
+def test_is_valid_uzbek_side_cyrillic():
+    assert is_valid_uzbek_side("Тошкент шаҳри") is True
+    assert is_valid_uzbek_side("шшшш") is False  # consonants only, no vowels
+
+
+def test_filter_dataset_applies_passes_filters():
+    ds = Dataset.from_list([
+        {"anchor": "Toshkent shahri.", "positive": "Tashkent city.", "source": "x", "anchor_lang": "uz_Latn", "positive_lang": "en"},  # 2-word, should pass
+        {"anchor": "Hi", "positive": "Salom dunyo.", "source": "x", "anchor_lang": "uz_Latn", "positive_lang": "en"},  # too short
+        {"anchor": "", "positive": "Tashkent is the capital.", "source": "x", "anchor_lang": "uz_Latn", "positive_lang": "en"},  # empty
+    ])
+    filtered = filter_dataset(ds)
+    assert len(filtered) == 1
+    assert filtered[0]["anchor"] == "Toshkent shahri."
+
+
+def test_apostrophe_normalized_in_transform():
+    raw = Dataset.from_dict({
+        "translation": [
+            {"en": "Uzbekistan is in Central Asia.", "uz": "O'zbekiston Markaziy Osiyoda joylashgan."},
+        ]
+    })
+    ds = transform_opus100(raw)
+    assert "Oʻzbekiston" in ds[0]["anchor"]
+
+
+def test_unknown_source_raises():
+    from utils.dataset_io import load_source
+
+    with pytest.raises(KeyError):
+        load_source("does_not_exist")

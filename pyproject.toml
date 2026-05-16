@@ -19,10 +19,10 @@ ignore = [
 ]
 
 [tool.ruff.lint.per-file-ignores]
-"tests/*" = ["B011"]  # assert False used intentionally in tests
-# Cyrillic<->Latin mappings deliberately mix visually similar characters.
+"tests/*" = ["B011", "RUF001", "RUF002", "RUF003"]  # tests mix Cyrillic+Latin Uzbek text fixtures
+# Cyrillic<->Latin mappings and Uzbek text constants deliberately mix visually similar characters.
 "utils/translit.py" = ["RUF001", "RUF002", "RUF003"]
-"tests/test_translit.py" = ["RUF001", "RUF002", "RUF003"]
+"utils/dataset_io.py" = ["RUF001", "RUF002", "RUF003"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

@@ -1,0 +1,28 @@
+{
+  "schema_version": 1,
+  "model_id": "ibm-granite/granite-embedding-97m-multilingual-r2",
+  "model_sha": "0042fe50254a07c40d588348ed5537a4e1e8b6a0",
+  "evaluated_at": "2026-05-17T06:15:02.738785+00:00",
+  "device": "cuda:0",
+  "smoke": false,
+  "metrics": {
+    "parallel_cosine": {
+      "mean_cosine_parallel": 0.8171311616897583,
+      "mean_cosine_random": 0.7351105809211731,
+      "margin": 0.0820205807685852,
+      "n": 1012
+    },
+    "retrieval": {
+      "n": 5000,
+      "recall@1": 0.9032,
+      "recall@5": 0.9498,
+      "recall@10": 0.9644
+    },
+    "mixscript": {
+      "mean_cosine_mixscript": 0.87183678150177,
+      "pct_above_0.9": 0.12845849802371542,
+      "n": 1012,
+      "cyrl_source": "transliterated"
+    }
+  }
+}

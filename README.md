@@ -73,7 +73,7 @@ python train.py --config configs/train_hardneg.yaml
 
 - Single T4 (Colab free tier, 16GB, sm_75)
 - fp16 (T4 has no bf16), SDPA attention (T4 has no FlashAttention-2)
-- `sentence-transformers` v5.3+ with `SentenceTransformerTrainer`
+- `sentence-transformers` v5.4+ with `SentenceTransformerTrainer`
 - See [`configs/train.yaml`](configs/train.yaml) for hyperparameters
 
 ## Limitations

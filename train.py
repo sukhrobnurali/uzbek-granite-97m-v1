@@ -47,7 +47,7 @@ class TrainConfig(BaseModel):
 
 def _build_training_args(cfg: TrainConfig, has_validation: bool):
     from sentence_transformers import SentenceTransformerTrainingArguments
-    from sentence_transformers.training_args import BatchSamplers
+    from sentence_transformers.sentence_transformer.training_args import BatchSamplers
 
     common: dict = dict(
         output_dir=cfg.output_dir,
@@ -86,7 +86,7 @@ def _build_training_args(cfg: TrainConfig, has_validation: bool):
 def train(cfg: TrainConfig) -> None:
     from datasets import load_dataset
     from sentence_transformers import SentenceTransformer, SentenceTransformerTrainer
-    from sentence_transformers.losses import MultipleNegativesRankingLoss
+    from sentence_transformers.sentence_transformer.losses import MultipleNegativesRankingLoss
     from transformers import set_seed
 
     set_seed(cfg.seed)

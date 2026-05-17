@@ -153,25 +153,19 @@ def metric_mixscript(
 
 
 def load_flores_devtest_pairs() -> tuple[list[str], list[str]]:
-    """Returns (uzbek_Latn_sentences, english_sentences) from FLORES-200 devtest."""
-    from datasets import load_dataset
+    """Returns (uzbek_Latn_sentences, english_sentences) from FLORES+ devtest (1012 rows)."""
+    from utils.dataset_io import load_flores_plus
 
-    ds = load_dataset("Muennighoff/flores200", "uzn_Latn-eng_Latn", split="devtest")
-    return list(ds["sentence_uzn_Latn"]), list(ds["sentence_eng_Latn"])
+    ds = load_flores_plus("devtest", "eval_flores_devtest")
+    return list(ds["anchor"]), list(ds["positive"])
 
 
 def load_flores_devtest_cyrl(uz_latn_sentences: list[str]) -> tuple[list[str], str]:
-    """Returns (cyrillic_sentences, cyrl_source). Tries native uzn_Cyrl config first;
-    if unavailable, transliterates from Latin."""
-    from datasets import load_dataset
-
+    """FLORES+ has no uzn_Cyrl variant, so always transliterate from Latn.
+    Tagged 'transliterated' in the JSON for honest reporting."""
     from utils.translit import to_cyrillic
 
-    try:
-        ds = load_dataset("Muennighoff/flores200", "uzn_Cyrl-eng_Latn", split="devtest")
-        return list(ds["sentence_uzn_Cyrl"]), "native"
-    except Exception:
-        return [to_cyrillic(s) for s in uz_latn_sentences], "transliterated"
+    return [to_cyrillic(s) for s in uz_latn_sentences], "transliterated"
 
 
 def load_wiki_retrieval_eval(dataset_id: str = "sukhrobnurali/uzbek-embedding-pairs") -> tuple[list[str], list[str]]:

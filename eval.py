@@ -173,7 +173,7 @@ def load_wiki_retrieval_eval(dataset_id: str = "sukhrobnurali/uzbek-embedding-pa
     wiki_retrieval_eval config. Returns (titles, paragraphs)."""
     from datasets import load_dataset
 
-    ds = load_dataset(dataset_id, name="wiki_retrieval_eval", split="train")
+    ds = load_dataset(dataset_id, name="wiki_retrieval_eval", split="test")
     return list(ds["anchor"]), list(ds["positive"])
 
 
